@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import com.mojang.logging.LogUtils;
 
 import fun.sakuraspark.sakuraupdater.SakuraUpdaterClient;
+import fun.sakuraspark.sakuraupdater.SakuraUpdaterClient.UpdateCheckResult;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -27,7 +28,7 @@ public class FixScreen extends Screen {
 
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    int fixStatus = 0; // -1: error, 0: checking, 1: issues found, 2: no issues
+    UpdateCheckResult fixStatus = UpdateCheckResult.CHECKING;
 
     public FixScreen() {
         super(Component.translatable("gui.sakuraupdater.FixScreen"));
@@ -36,17 +37,17 @@ public class FixScreen extends Screen {
             // 这里运行在后台线程中
             try {
                 // 强制进行完整性检查
-                int result = SakuraUpdaterClient.getInstance().updateCheck();
-                if (result == -1) {
-                    return -1;
+                UpdateCheckResult result = SakuraUpdaterClient.getInstance().updateCheck();
+                if (result == UpdateCheckResult.ERROR) {
+                    return UpdateCheckResult.ERROR;
                 }
                 if (SakuraUpdaterClient.getInstance().integrityCheck()) {
-                    return 1; // Need update
+                    return UpdateCheckResult.NEED_UPDATE; // Need update
                 }
-                return 2; // No issues found
+                return UpdateCheckResult.NO_UPDATE; // No issues found
             } catch (Exception e) {
                 LOGGER.error("Error during update check", e);
-                return -1;
+                return UpdateCheckResult.ERROR;
             }
         }, Util.backgroundExecutor()) // 使用 Minecraft 的后台线程池
                 .thenAcceptAsync(result -> {
@@ -62,7 +63,7 @@ public class FixScreen extends Screen {
     @Override
     public void init() {
         super.init();
-        if (fixStatus == -1) {
+        if (fixStatus == UpdateCheckResult.ERROR || fixStatus == UpdateCheckResult.SERVER_IS_IN_FACTORY) {
             this.addRenderableWidget(
                     Button.builder(Component.translatable("gui.sakuraupdater.FixScreen.retry"), button -> {
                         // 点击按钮后重新检查更新
@@ -73,7 +74,7 @@ public class FixScreen extends Screen {
                         // 点击按钮后关闭当前界面
                         Minecraft.getInstance().setScreen(new TitleScreen(true));
                     }).bounds(this.width / 2 - 100, this.height - 20, 200, 20).build());
-        } else if (fixStatus == 1) {
+        } else if (fixStatus == UpdateCheckResult.NEED_UPDATE) {
             this.addRenderableWidget(
                     Button.builder(Component.translatable("gui.sakuraupdater.FixScreen.fix"), button -> {
                         // 点击按钮后打开更新界面
@@ -108,39 +109,47 @@ public class FixScreen extends Screen {
         guiGraphics.pose().pushPose();
         guiGraphics.pose().translate(this.width / 2 - (16 * scale) / 2, this.height / 4 - (16 * scale) / 2, 0);
         guiGraphics.pose().scale(scale, scale, 0f);
-        if (fixStatus == 1 || fixStatus == 2) { // 显示附魔书
+        if (fixStatus == UpdateCheckResult.NEED_UPDATE || fixStatus == UpdateCheckResult.NO_UPDATE) { // 显示附魔书
             ItemStack stack = new ItemStack(Items.ENCHANTED_BOOK);
             stack.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, false);
             guiGraphics.renderItem(stack, 0, 0);
-        } else if (fixStatus == -1) {// 出错时显示土豆服务器加ping unknown
+        } else if (fixStatus == UpdateCheckResult.SERVER_IS_IN_FACTORY) { // 服务器处于工厂模式时显示工作台和钻石镐
+            ItemStack stack = new ItemStack(Items.CRAFTING_TABLE);
+            guiGraphics.renderItem(stack, 0, 0);
+            stack = new ItemStack(Items.DIAMOND_PICKAXE);
+            guiGraphics.renderItem(stack, 0, 0);
+        } else if (fixStatus == UpdateCheckResult.ERROR) {// 出错时显示土豆服务器加ping unknown
             ItemStack stack = new ItemStack(Items.POISONOUS_POTATO);
             guiGraphics.renderItem(stack, 0, 0);
         }
         guiGraphics.pose().popPose();
 
-        if (fixStatus == 1) {
+        if (fixStatus == UpdateCheckResult.NEED_UPDATE) {
             guiGraphics.blit(CANCEL_LOCATION, this.width / 2+5, this.height / 4+5, 0, 0, 18, 18, 18, 18); // 绘制红色叉号
-        } else if (fixStatus == 2) {
+        } else if (fixStatus == UpdateCheckResult.NO_UPDATE) {
             guiGraphics.blit(CONFIRM_LOCATION, this.width / 2+5, this.height / 4+5, 0, 0, 18, 18, 18, 18); // 绘制绿色对勾
-        } else if (fixStatus == -1) {
+        } else if (fixStatus == UpdateCheckResult.ERROR) {
             guiGraphics.blit(PING_UNKNOWN_LOCATION, this.width / 2+10, this.height / 4+10, 0, 0, 10, 8, 10, 8); // 绘制ping unknown图标
         }
 
-        if (fixStatus == 0) {
+        if (fixStatus == UpdateCheckResult.CHECKING) {
             guiGraphics.drawCenteredString(this.font, this.title, this.width / 2, this.height / 2, 16777215);
-        } else if (fixStatus == 1) {
+        } else if (fixStatus == UpdateCheckResult.NEED_UPDATE) {
             guiGraphics.drawCenteredString(this.font,
                     Component.translatable("gui.sakuraupdater.FixScreen.IssuesFound"), this.width / 2,
                     this.height / 2, 16711680); // Red color for issues found
-        } else if (fixStatus == 2) {
+        } else if (fixStatus == UpdateCheckResult.NO_UPDATE) {
             guiGraphics.drawCenteredString(this.font,
                     Component.translatable("gui.sakuraupdater.FixScreen.NoIssues"), this.width / 2,
                     this.height / 2, 65280); // Green color for no issues found
-        } else if (fixStatus == -1) {
+        } else if (fixStatus == UpdateCheckResult.ERROR) {
             guiGraphics.drawCenteredString(this.font,
                     Component.translatable("gui.sakuraupdater.FixScreen.error"), this.width / 2,
                     this.height / 2, 16711680); // Red color for error
-
+        } else if (fixStatus == UpdateCheckResult.SERVER_IS_IN_FACTORY) {
+            guiGraphics.drawCenteredString(this.font,
+                    Component.translatable("gui.sakuraupdater.FixScreen.ServerInFactoryMode"), this.width / 2,
+                    this.height / 2, 16711680); // Red color for error
         }
     }
 }
